@@ -19,6 +19,8 @@ package com.google.cloud.spanner.jdbc;
 import com.google.cloud.ByteArray;
 import com.google.cloud.spanner.Statement;
 import com.google.cloud.spanner.Statement.Builder;
+import com.google.cloud.spanner.Type;
+import com.google.cloud.spanner.Value;
 import com.google.cloud.spanner.ValueBinder;
 import com.google.cloud.spanner.jdbc.JdbcSqlExceptionFactory.JdbcSqlExceptionImpl;
 import com.google.common.io.CharStreams;
@@ -39,6 +41,7 @@ import java.sql.NClob;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
+import java.sql.SQLType;
 import java.sql.Time;
 import java.sql.Timestamp;
 import java.sql.Types;
@@ -129,7 +132,8 @@ class JdbcParameterStore {
         getParameter(parameterIndex),
         getType(parameterIndex),
         getScaleOrLength(parameterIndex),
-        column);
+        column,
+        null);
   }
 
   void setType(int parameterIndex, Integer type) throws SQLException {
@@ -138,7 +142,21 @@ class JdbcParameterStore {
         getParameter(parameterIndex),
         type,
         getScaleOrLength(parameterIndex),
-        getColumn(parameterIndex));
+        getColumn(parameterIndex),
+        null);
+  }
+
+  void setParameter(int parameterIndex, Object value) throws SQLException {
+    setParameter(parameterIndex, value, null, null, null, null);
+  }
+
+  void setParameter(int parameterIndex, Object value, SQLType sqlType) throws SQLException {
+    setParameter(parameterIndex, value, null, null, null, sqlType);
+  }
+
+  void setParameter(int parameterIndex, Object value, SQLType sqlType, Integer scaleOrLength)
+      throws SQLException {
+    setParameter(parameterIndex, value, null, scaleOrLength, null, sqlType);
   }
 
   void setParameter(int parameterIndex, Object value, Integer sqlType) throws SQLException {
@@ -147,15 +165,25 @@ class JdbcParameterStore {
 
   void setParameter(int parameterIndex, Object value, Integer sqlType, Integer scaleOrLength)
       throws SQLException {
-    setParameter(parameterIndex, value, sqlType, scaleOrLength, null);
+    setParameter(parameterIndex, value, sqlType, scaleOrLength, null, null);
   }
 
   void setParameter(
-      int parameterIndex, Object value, Integer sqlType, Integer scaleOrLength, String column)
+      int parameterIndex,
+      Object value,
+      Integer sqlType,
+      Integer scaleOrLength,
+      String column,
+      SQLType sqlTypeObject)
       throws SQLException {
-    // check that only valid type/value combinations are entered
-    if (sqlType != null) {
-      checkTypeAndValueSupported(value, sqlType);
+    if (!(value instanceof Value)) {
+      // check that only valid type/value combinations are entered
+      if (sqlTypeObject != null && sqlType == null) {
+        sqlType = sqlTypeObject.getVendorTypeNumber();
+      }
+      if (sqlType != null) {
+        checkTypeAndValueSupported(value, sqlType);
+      }
     }
     // set the parameter
     highestIndex = Math.max(parameterIndex, highestIndex);
@@ -216,6 +244,7 @@ class JdbcParameterStore {
       case Types.NCLOB:
       case Types.NUMERIC:
       case Types.DECIMAL:
+      case JsonType.VENDOR_TYPE_NUMBER:
         return true;
     }
     return false;
@@ -267,6 +296,12 @@ class JdbcParameterStore {
         return value instanceof Clob || value instanceof Reader;
       case Types.NCLOB:
         return value instanceof NClob || value instanceof Reader;
+      case JsonType.VENDOR_TYPE_NUMBER:
+        return value instanceof String
+            || value instanceof InputStream
+            || value instanceof Reader
+            || value instanceof URL
+            || (value instanceof Value && ((Value) value).getType().getCode() == Type.Code.JSON);
     }
     return false;
   }
@@ -416,7 +451,11 @@ class JdbcParameterStore {
   /** Set a value from a JDBC parameter on a Spanner {@link Statement}. */
   Builder setValue(ValueBinder<Builder> binder, Object value, Integer sqlType) throws SQLException {
     Builder res;
-    if (sqlType != null && sqlType == Types.ARRAY) {
+    if (value instanceof Value) {
+      // If a Value has been constructed, then that should override any sqlType that might have been
+      // supplied.
+      res = binder.to((Value) value);
+    } else if (sqlType != null && sqlType == Types.ARRAY) {
       if (value instanceof Array) {
         Array array = (Array) value;
         value = array.getArray();
@@ -492,30 +531,41 @@ class JdbcParameterStore {
       case Types.NCHAR:
       case Types.NVARCHAR:
       case Types.LONGNVARCHAR:
+      case JsonType.VENDOR_TYPE_NUMBER:
+        String stringValue;
         if (value instanceof String) {
-          return binder.to((String) value);
+          stringValue = (String) value;
         } else if (value instanceof InputStream) {
           InputStreamReader reader =
               new InputStreamReader((InputStream) value, StandardCharsets.US_ASCII);
           try {
-            return binder.to(CharStreams.toString(reader));
+            stringValue = CharStreams.toString(reader);
           } catch (IOException e) {
             throw JdbcSqlExceptionFactory.of(
                 "could not set string from input stream", Code.INVALID_ARGUMENT, e);
           }
         } else if (value instanceof Reader) {
           try {
-            return binder.to(CharStreams.toString((Reader) value));
+            stringValue = CharStreams.toString((Reader) value);
           } catch (IOException e) {
             throw JdbcSqlExceptionFactory.of(
                 "could not set string from reader", Code.INVALID_ARGUMENT, e);
           }
         } else if (value instanceof URL) {
-          return binder.to(((URL) value).toString());
+          stringValue = ((URL) value).toString();
         } else if (value instanceof UUID) {
-          return binder.to(((UUID) value).toString());
+          stringValue = ((UUID) value).toString();
+        } else if (value instanceof Value
+            && ((Value) value).getType().getCode() == Type.Code.JSON) {
+          return binder.to((Value) value);
+        } else {
+          throw JdbcSqlExceptionFactory.of(value + " is not a valid string", Code.INVALID_ARGUMENT);
         }
-        throw JdbcSqlExceptionFactory.of(value + " is not a valid string", Code.INVALID_ARGUMENT);
+        if (sqlType == JsonType.VENDOR_TYPE_NUMBER) {
+          return binder.to(Value.json(stringValue));
+        } else {
+          return binder.to(stringValue);
+        }
       case Types.DATE:
         if (value instanceof Date) {
           return binder.to(JdbcTypeConverter.toGoogleDate((Date) value));
@@ -717,14 +767,16 @@ class JdbcParameterStore {
         case Types.LONGNVARCHAR:
         case Types.CLOB:
         case Types.NCLOB:
-          return binder.toStringArray((Iterable<String>) null);
+          return binder.toStringArray(null);
+        case JsonType.VENDOR_TYPE_NUMBER:
+          return binder.toJsonArray(null);
         case Types.DATE:
-          return binder.toDateArray((Iterable<com.google.cloud.Date>) null);
+          return binder.toDateArray(null);
         case Types.TIME:
         case Types.TIME_WITH_TIMEZONE:
         case Types.TIMESTAMP:
         case Types.TIMESTAMP_WITH_TIMEZONE:
-          return binder.toTimestampArray((Iterable<com.google.cloud.Timestamp>) null);
+          return binder.toTimestampArray(null);
         case Types.BINARY:
         case Types.VARBINARY:
         case Types.LONGVARBINARY:
@@ -777,7 +829,11 @@ class JdbcParameterStore {
     } else if (Timestamp[].class.isAssignableFrom(value.getClass())) {
       return binder.toTimestampArray(JdbcTypeConverter.toGoogleTimestamps((Timestamp[]) value));
     } else if (String[].class.isAssignableFrom(value.getClass())) {
-      return binder.toStringArray(Arrays.asList((String[]) value));
+      if (type == JsonType.VENDOR_TYPE_NUMBER) {
+        return binder.toJsonArray(Arrays.asList((String[]) value));
+      } else {
+        return binder.toStringArray(Arrays.asList((String[]) value));
+      }
     } else if (byte[][].class.isAssignableFrom(value.getClass())) {
       return binder.toBytesArray(JdbcTypeConverter.toGoogleBytes((byte[][]) value));
     }
