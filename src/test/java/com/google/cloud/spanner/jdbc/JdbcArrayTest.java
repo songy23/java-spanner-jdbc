@@ -21,8 +21,8 @@ import static com.google.common.truth.Truth.assertThat;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNull;
-import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.assertThrows;
+import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 
 import com.google.cloud.spanner.ErrorCode;
@@ -154,7 +154,6 @@ public class JdbcArrayTest {
         JdbcArray.createArray(
             "JSON",
             new String[] {"{}", "[]", null, "{\"name\":\"John\", \"age\":30, \"car\":null}"});
-    // JDBC can't make the distinction between JSON and STRING.
     assertThat(array.getBaseType()).isEqualTo(JsonType.VENDOR_TYPE_NUMBER);
     assertThat(((String[]) array.getArray(1, 1))[0]).isEqualTo("{}");
     try (ResultSet rs = array.getResultSet()) {

@@ -146,28 +146,56 @@ class JdbcParameterStore {
         null);
   }
 
+  /** Sets a parameter value. The type will be determined based on the type of the value. */
   void setParameter(int parameterIndex, Object value) throws SQLException {
     setParameter(parameterIndex, value, null, null, null, null);
   }
 
+  /**
+   * Sets a parameter value as the specified vendor-specific {@link SQLType}. Only {@link JsonType}
+   * is currently supported.
+   */
   void setParameter(int parameterIndex, Object value, SQLType sqlType) throws SQLException {
     setParameter(parameterIndex, value, null, null, null, sqlType);
   }
 
+  /**
+   * Sets a parameter value as the specified vendor-specific {@link SQLType} with the specified
+   * scale or length. Only {@link JsonType} is currently supported, which does not have a variable
+   * scale or length. This method is only here to support the {@link
+   * PreparedStatement#setObject(int, Object, SQLType, int)} method.
+   */
   void setParameter(int parameterIndex, Object value, SQLType sqlType, Integer scaleOrLength)
       throws SQLException {
     setParameter(parameterIndex, value, null, scaleOrLength, null, sqlType);
   }
 
+  /**
+   * Sets a parameter value as the specified sql type. The type can be one of the constants in
+   * {@link Types} or a vendor specific type code supplied by a vendor specific {@link SQLType}.
+   * Currently only {@link JsonType#VENDOR_TYPE_NUMBER} is supported for the latter.
+   */
   void setParameter(int parameterIndex, Object value, Integer sqlType) throws SQLException {
     setParameter(parameterIndex, value, sqlType, null);
   }
 
+  /**
+   * Sets a parameter value as the specified sql type with the specified scale or length. The type
+   * can be one of the constants in {@link Types} or a vendor specific type code supplied by a
+   * vendor specific {@link SQLType}. Currently only {@link JsonType#VENDOR_TYPE_NUMBER} is
+   * supported for the latter.
+   */
   void setParameter(int parameterIndex, Object value, Integer sqlType, Integer scaleOrLength)
       throws SQLException {
     setParameter(parameterIndex, value, sqlType, scaleOrLength, null, null);
   }
 
+  /**
+   * Sets a parameter value as the specified sql type with the specified scale or length. Any {@link
+   * SQLType} instance will take precedence over sqlType. The type can be one of the constants in
+   * {@link Types} or a vendor specific type code supplied by a vendor specific {@link SQLType}.
+   * Currently only {@link JsonType#VENDOR_TYPE_NUMBER} is supported for the latter.
+   */
   void setParameter(
       int parameterIndex,
       Object value,
@@ -176,6 +204,7 @@ class JdbcParameterStore {
       String column,
       SQLType sqlTypeObject)
       throws SQLException {
+    // Ignore the sql type if the application has created a Spanner Value object.
     if (!(value instanceof Value)) {
       // check that only valid type/value combinations are entered
       if (sqlTypeObject != null && sqlType == null) {
@@ -300,7 +329,6 @@ class JdbcParameterStore {
         return value instanceof String
             || value instanceof InputStream
             || value instanceof Reader
-            || value instanceof URL
             || (value instanceof Value && ((Value) value).getType().getCode() == Type.Code.JSON);
     }
     return false;
@@ -531,41 +559,34 @@ class JdbcParameterStore {
       case Types.NCHAR:
       case Types.NVARCHAR:
       case Types.LONGNVARCHAR:
-      case JsonType.VENDOR_TYPE_NUMBER:
         String stringValue;
         if (value instanceof String) {
           stringValue = (String) value;
         } else if (value instanceof InputStream) {
-          InputStreamReader reader =
-              new InputStreamReader((InputStream) value, StandardCharsets.US_ASCII);
-          try {
-            stringValue = CharStreams.toString(reader);
-          } catch (IOException e) {
-            throw JdbcSqlExceptionFactory.of(
-                "could not set string from input stream", Code.INVALID_ARGUMENT, e);
-          }
+          stringValue = getStringFromInputStream((InputStream) value);
         } else if (value instanceof Reader) {
-          try {
-            stringValue = CharStreams.toString((Reader) value);
-          } catch (IOException e) {
-            throw JdbcSqlExceptionFactory.of(
-                "could not set string from reader", Code.INVALID_ARGUMENT, e);
-          }
+          stringValue = getStringFromReader((Reader) value);
         } else if (value instanceof URL) {
           stringValue = ((URL) value).toString();
         } else if (value instanceof UUID) {
           stringValue = ((UUID) value).toString();
-        } else if (value instanceof Value
-            && ((Value) value).getType().getCode() == Type.Code.JSON) {
-          return binder.to((Value) value);
         } else {
           throw JdbcSqlExceptionFactory.of(value + " is not a valid string", Code.INVALID_ARGUMENT);
         }
-        if (sqlType == JsonType.VENDOR_TYPE_NUMBER) {
-          return binder.to(Value.json(stringValue));
+        return binder.to(stringValue);
+      case JsonType.VENDOR_TYPE_NUMBER:
+        String jsonValue;
+        if (value instanceof String) {
+          jsonValue = (String) value;
+        } else if (value instanceof InputStream) {
+          jsonValue = getStringFromInputStream((InputStream) value);
+        } else if (value instanceof Reader) {
+          jsonValue = getStringFromReader((Reader) value);
         } else {
-          return binder.to(stringValue);
+          throw JdbcSqlExceptionFactory.of(
+              value + " is not a valid JSON value", Code.INVALID_ARGUMENT);
         }
+        return binder.to(Value.json(jsonValue));
       case Types.DATE:
         if (value instanceof Date) {
           return binder.to(JdbcTypeConverter.toGoogleDate((Date) value));
@@ -648,6 +669,25 @@ class JdbcParameterStore {
         throw JdbcSqlExceptionFactory.of(value + " is not a valid clob", Code.INVALID_ARGUMENT);
     }
     return null;
+  }
+
+  private String getStringFromInputStream(InputStream inputStream) throws SQLException {
+    InputStreamReader reader = new InputStreamReader(inputStream, StandardCharsets.US_ASCII);
+    try {
+      return CharStreams.toString(reader);
+    } catch (IOException e) {
+      throw JdbcSqlExceptionFactory.of(
+          "could not set string from input stream", Code.INVALID_ARGUMENT, e);
+    }
+  }
+
+  private String getStringFromReader(Reader reader) throws SQLException {
+    try {
+      return CharStreams.toString(reader);
+    } catch (IOException e) {
+      throw JdbcSqlExceptionFactory.of(
+          "could not set string from reader", Code.INVALID_ARGUMENT, e);
+    }
   }
 
   /** Set the parameter value based purely on the type of the value. */
