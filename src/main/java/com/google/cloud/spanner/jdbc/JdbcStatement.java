@@ -29,8 +29,10 @@ import com.google.cloud.spanner.connection.StatementResult;
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Preconditions;
 import com.google.rpc.Code;
+import java.util.logging.Logger;
 import java.sql.ResultSet;
 import java.sql.SQLException;
+import java.sql.Timestamp;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -50,6 +52,9 @@ class JdbcStatement extends AbstractJdbcStatement {
   private BatchType currentBatchType = BatchType.NONE;
   final List<Statement> batchedStatements = new ArrayList<>();
 
+  private static final Logger logger = Logger.getLogger(JdbcStatement.class.getName());
+  static final String STRONG_READ = "Strong Read ";
+
   JdbcStatement(JdbcConnection connection) {
     super(connection);
   }
@@ -57,6 +62,23 @@ class JdbcStatement extends AbstractJdbcStatement {
   @Override
   public ResultSet executeQuery(String sql) throws SQLException {
     checkClosed();
+
+    if (sql.startsWith(STRONG_READ)) {
+      try {
+        Timestamp readTimestamp = getConnection().getReadTimestamp();
+        if (readTimestamp != null) {
+          logger.severe("Find read timestamp for strong read: " + readTimestamp.toString());
+        }
+      } catch (SQLException e) {
+        logger.warning("Failed to get read timestamp for strong read " + e.toString());
+      }
+      Statement statement = Statement.of(sql.substring(STRONG_READ.length()));
+      if (getConnection().lastExecutedStatement != null) {
+        logger.warning("Last executed statement before strong read " + getConnection().lastExecutedStatement.getSql());
+      }
+      return executeQuery(statement);
+    }
+
     return executeQuery(Statement.of(sql));
   }
 
@@ -108,6 +130,7 @@ class JdbcStatement extends AbstractJdbcStatement {
 
   boolean executeStatement(Statement statement) throws SQLException {
     StatementResult result = execute(statement);
+    getConnection().lastExecutedStatement = statement;
     switch (result.getResultType()) {
       case RESULT_SET:
         currentResultSet = JdbcResultSet.of(this, result.getResultSet());

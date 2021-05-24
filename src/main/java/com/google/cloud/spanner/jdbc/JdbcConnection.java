@@ -54,6 +54,8 @@ class JdbcConnection extends AbstractJdbcConnection {
 
   private Map<String, Class<?>> typeMap = new HashMap<>();
 
+  com.google.cloud.spanner.Statement lastExecutedStatement;
+
   JdbcConnection(String connectionUrl, ConnectionOptions options) throws SQLException {
     super(connectionUrl, options);
   }
