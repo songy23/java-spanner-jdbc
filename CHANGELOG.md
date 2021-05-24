@@ -1,5 +1,22 @@
 # Changelog
 
+## [2.2.0](https://www.github.com/googleapis/java-spanner-jdbc/compare/v2.1.0...v2.2.0) (2021-05-24)
+
+
+### Features
+
+* add `gcf-owl-bot[bot]` to `ignoreAuthors` ([#474](https://www.github.com/googleapis/java-spanner-jdbc/issues/474)) ([c14f17b](https://www.github.com/googleapis/java-spanner-jdbc/commit/c14f17b411b15e778a68ce998de04732b159d7ac))
+
+
+### Dependencies
+
+* update dependency com.google.cloud:google-cloud-shared-dependencies to v1.2.0 ([#473](https://www.github.com/googleapis/java-spanner-jdbc/issues/473)) ([a6cc069](https://www.github.com/googleapis/java-spanner-jdbc/commit/a6cc0697ed5916c665f007a1bf16660b8b91f9f9))
+
+
+### Documentation
+
+* document connection properties in README ([#478](https://www.github.com/googleapis/java-spanner-jdbc/issues/478)) ([3ccc543](https://www.github.com/googleapis/java-spanner-jdbc/commit/3ccc5433bec261b18d2536b04590e7645e47ed9b)), closes [#456](https://www.github.com/googleapis/java-spanner-jdbc/issues/456)
+
 ## [2.1.0](https://www.github.com/googleapis/java-spanner-jdbc/compare/v2.0.2...v2.1.0) (2021-05-18)
 
 
